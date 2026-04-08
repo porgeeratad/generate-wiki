@@ -107,7 +107,7 @@ setup_docsify() {
       subMaxLevel: 3,
       search: { placeholder: 'Search...', noData: 'No results', depth: 3 },
       auto2top: true,
-      relativePath: true
+      relativePath: false
     }
   </script>
   <script src="https://cdn.jsdelivr.net/npm/docsify@4/lib/docsify.min.js"></script>
