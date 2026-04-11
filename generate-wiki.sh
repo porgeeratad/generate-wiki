@@ -176,15 +176,63 @@ HEADEOF
 
     local title=$(to_title "$dirname")
 
-    # Try to extract description from README.md first line
+    # Try to extract description from README.md first line.
+    #
+    # We delegate to python3 because:
+    #   1. `cut -c1-80` is BYTE-based on most systems (BSD on macOS,
+    #      GNU when LC_ALL=C). Truncating at byte 80 of a UTF-8 stream
+    #      slices Thai characters (3 bytes each) mid-codepoint and the
+    #      browser renders the dangling bytes as the U+FFFD replacement
+    #      glyph (`�`). The visible artifact on the landing page was
+    #      "หุ้น **US 55 ตัว + TH 48 �".
+    #   2. We want to strip markdown bold/italic/code markers (`**`,
+    #      `__`, `*`, `_`, `` ` ``) BEFORE truncating, otherwise the
+    #      character budget is wasted on syntax. The README's first
+    #      content line is often `**Project** — description...`.
+    #   3. We want to HTML-escape the result so a `<` or `&` in the
+    #      README can't break out of the `<p>` tag in the landing
+    #      page (latent XSS guard for a private wiki).
+    # Python is on every QNAP firmware shipped after 2020, so this is
+    # a safe dependency for this script.
     local desc=""
     if [ -f "$dir/README.md" ]; then
-      desc=$(head -5 "$dir/README.md" | grep -v "^#" | grep -v "^$" | head -1 | cut -c1-80)
+      desc=$(python3 - "$dir/README.md" <<'PYEOF'
+import html, re, sys
+# chr(96) is a backtick — written this way because a literal `
+# inside a $(...) bash command substitution would be parsed as the
+# old-style nested-command marker even when the heredoc body is
+# single-quoted. chr() sidesteps the bash tokenizer entirely.
+BTICK = chr(96)
+try:
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
+        for raw in f.readlines()[:10]:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            # Strip markdown emphasis + inline code markers.
+            line = re.sub(BTICK + "+", "", line)
+            line = re.sub(r"\*\*|__", "", line)
+            line = re.sub(r"[*_]", "", line)
+            line = line.strip()
+            if not line:
+                continue
+            # Character-level truncation (NOT byte-level) — Thai-safe.
+            if len(line) > 80:
+                line = line[:79].rstrip() + "…"
+            print(html.escape(line))
+            break
+except OSError:
+    pass
+PYEOF
+)
     fi
     [ -z "$desc" ] && desc="Documentation"
 
-    # Count .md files
-    local file_count=$(find "$dir" -name "*.md" ! -name "_*" ! -name "README.md" | wc -l)
+    # Count .md files. `wc -l` on BSD pads its output with leading
+    # spaces ("      15"), which leaks straight into the HTML as
+    # "      15 docs" — strip with `tr -d` so the rendered card is
+    # tight.
+    local file_count=$(find "$dir" -name "*.md" ! -name "_*" ! -name "README.md" | wc -l | tr -d ' ')
 
     cat >> "$landing" << CARDEOF
       <a class="card" href="/$dirname/">
